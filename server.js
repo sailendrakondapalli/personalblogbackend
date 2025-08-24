@@ -24,7 +24,7 @@ const UserSchema = new mongoose.Schema({
   name: String,
   username: String,
   password: String,
-  role: String,
+  role: { type: String, default: "user" }, // default = user
 });
 const User = mongoose.model("User", UserSchema);
 
@@ -64,12 +64,12 @@ const verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader) return res.status(401).json({ message: "No token provided" });
 
-  const token = authHeader.split(" ")[1]; // "Bearer <token>"
+  const token = authHeader.split(" ")[1];
   if (!token) return res.status(401).json({ message: "No token provided" });
 
   try {
-    const decoded = jwt.verify(token, "secretkey"); // same secret as login/register
-    req.user = decoded; // attach decoded info
+    const decoded = jwt.verify(token, "secretkey");
+    req.user = decoded;
     next();
   } catch (err) {
     return res.status(403).json({ message: "Invalid token" });
@@ -81,13 +81,18 @@ const verifyToken = (req, res, next) => {
 // Register
 app.post("/auth/register", async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, role } = req.body;
 
     let user = await User.findOne({ username: email });
     if (user) return res.status(400).json({ message: "User already exists" });
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    user = new User({ username: email, password: hashedPassword, role: "user", name });
+    user = new User({
+      username: email,
+      password: hashedPassword,
+      role: role || "user", // role comes from frontend
+      name,
+    });
     await user.save();
 
     const token = jwt.sign({ id: user._id, role: user.role, name: user.name }, "secretkey");
@@ -128,18 +133,15 @@ app.post("/articles/add", upload.single("image"), async (req, res) => {
   }
 });
 
+// Upload image
 app.post("/articles/upload-image", upload.single("image"), (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
-    res.json({ url: req.file.path }); // Cloudinary provides URL in path
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    res.json({ url: req.file.path });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ error: "Image upload failed" });
   }
 });
-
 
 // Get all articles
 app.get("/articles", async (req, res) => {
@@ -163,7 +165,7 @@ app.post("/articles/:id/like", async (req, res) => {
   res.json({ likes: populatedArticle.likes });
 });
 
-// Unlike an article
+// Unlike
 app.post("/articles/:id/unlike", async (req, res) => {
   const { userId } = req.body;
   const article = await Article.findById(req.params.id);
@@ -182,20 +184,20 @@ app.post("/articles/:id/comment", async (req, res) => {
   res.json(populated.comments);
 });
 
-// Search articles
+// Search
 app.get("/articles/search/:query", async (req, res) => {
   const { query } = req.params;
   const articles = await Article.find({ title: { $regex: query, $options: "i" } }).select("title _id");
   res.json(articles);
 });
 
-// Delete article (only author)
+// Delete article (only admin OR author)
 app.delete("/articles/:id", verifyToken, async (req, res) => {
   try {
     const article = await Article.findById(req.params.id);
     if (!article) return res.status(404).send("Article not found");
 
-    if (article.author !== req.user.name)
+    if (req.user.role !== "admin" && article.author !== req.user.name)
       return res.status(403).send("Unauthorized");
 
     await Article.findByIdAndDelete(req.params.id);
