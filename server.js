@@ -103,10 +103,13 @@ app.post("/auth/register", async (req, res) => {
 });
 
 // Login
+// Login (case-insensitive)
 app.post("/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await User.findOne({ username: email });
+
+    // Case-insensitive search
+    const user = await User.findOne({ username: { $regex: `^${email}$`, $options: "i" } });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -118,6 +121,7 @@ app.post("/auth/login", async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 });
+
 
 // Add Article
 app.post("/articles/add", upload.single("image"), async (req, res) => {
