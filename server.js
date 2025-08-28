@@ -160,14 +160,30 @@ app.get("/articles/:id", async (req, res) => {
 });
 
 // Like an article
+// Toggle like/unlike
 app.post("/articles/:id/like", async (req, res) => {
   const { userId } = req.body;
   const article = await Article.findById(req.params.id);
-  if (!article.likes.includes(userId)) article.likes.push(userId);
+
+  if (!article) return res.status(404).json({ message: "Article not found" });
+
+  const index = article.likes.findIndex(
+    (id) => id.toString() === userId
+  );
+
+  if (index === -1) {
+    // not liked yet → add
+    article.likes.push(userId);
+  } else {
+    // already liked → remove (unlike)
+    article.likes.splice(index, 1);
+  }
+
   await article.save();
-  const populatedArticle = await Article.findById(req.params.id).populate("likes", "name username");
-  res.json({ likes: populatedArticle.likes });
+  const populated = await Article.findById(req.params.id).populate("likes", "name username");
+  res.json({ likes: populated.likes });
 });
+
 
 // Unlike
 app.post("/articles/:id/unlike", async (req, res) => {
