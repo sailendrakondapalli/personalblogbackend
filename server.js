@@ -7,6 +7,7 @@ const { CloudinaryStorage } = require("multer-storage-cloudinary");
 const cloudinary = require("cloudinary").v2;
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
+const nodemailer = require("nodemailer");
 
 const app = express();
 app.use(express.json());
@@ -22,7 +23,7 @@ mongoose.connect(
 // --- Schemas ---
 const UserSchema = new mongoose.Schema({
   name: String,
-  username: String,
+  username: String, // email
   password: String,
   role: { type: String, default: "user" }, // default = user
 });
@@ -76,9 +77,70 @@ const verifyToken = (req, res, next) => {
   }
 };
 
-// --- Routes ---
+// --- Nodemailer ---
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: "sailendrakondapalli@gmail.com", // your Gmail
+    pass: "napaiwxrhxjbsqnn", // ⚠️ use Gmail App Password
+  },
+});
 
-// Register
+// --- OTP store ---
+const otps = {};
+
+// --- Admin OTP Routes ---
+
+// Send OTP (always to fixed admin email)
+app.post("/auth/send-otp", async (req, res) => {
+  try {
+    const { email,name } = req.body;
+    
+    const exists = await User.findOne({ username: email });
+    if (exists) return res.status(400).json({ message: "Admin already exists" });
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    otps[email] = otp;
+
+    await transporter.sendMail({
+      from: "sailendrakondapalli@gmail.com",
+      to: "sailendrakondapalli@gmail.com", // always send to fixed email
+      subject: "Admin Account OTP Verification",
+      text: `Hi Gowtham, ${name} is Request to create admin for: ${email}\nOTP: ${otp}`,
+    });
+
+    res.json({ success: true, message: "OTP sent to Super Admin email for approval" });
+  } catch (err) {
+    console.error("OTP Error:", err);
+    res.status(500).json({ success: false, message: "Failed to send OTP" });
+  }
+});
+
+// Verify OTP & create Admin
+app.post("/auth/verify-otp", async (req, res) => {
+  try {
+    const { name, email, password, otp } = req.body;
+
+    if (otps[email] !== otp) {
+      return res.status(400).json({ success: false, message: "Invalid OTP" });
+    }
+
+    delete otps[email];
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new User({ name, username: email, password: hashedPassword, role: "admin" });
+    await user.save();
+
+    const token = jwt.sign({ id: user._id, role: user.role, name: user.name }, "secretkey");
+
+    res.json({ success: true, message: "Admin created successfully", token });
+  } catch (err) {
+    console.error("Verify OTP Error:", err);
+    res.status(500).json({ success: false, message: "Failed to create admin" });
+  }
+});
+
+// --- Normal Register (user signup) ---
 app.post("/auth/register", async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
@@ -90,7 +152,7 @@ app.post("/auth/register", async (req, res) => {
     user = new User({
       username: email,
       password: hashedPassword,
-      role: role || "user", // role comes from frontend
+      role: role || "user",
       name,
     });
     await user.save();
@@ -102,13 +164,11 @@ app.post("/auth/register", async (req, res) => {
   }
 });
 
-// Login
-// Login (case-insensitive)
+// --- Login (case-insensitive) ---
 app.post("/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // Case-insensitive search
     const user = await User.findOne({ username: { $regex: `^${email}$`, $options: "i" } });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
@@ -122,8 +182,7 @@ app.post("/auth/login", async (req, res) => {
   }
 });
 
-
-// Add Article
+// --- Articles ---
 app.post("/articles/add", upload.single("image"), async (req, res) => {
   try {
     const { title, description, author } = req.body;
@@ -137,7 +196,6 @@ app.post("/articles/add", upload.single("image"), async (req, res) => {
   }
 });
 
-// Upload image
 app.post("/articles/upload-image", upload.single("image"), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -147,19 +205,16 @@ app.post("/articles/upload-image", upload.single("image"), (req, res) => {
   }
 });
 
-// Get all articles
 app.get("/articles", async (req, res) => {
   const articles = await Article.find().populate("comments.user", "username");
   res.json(articles);
 });
 
-// Get single article
 app.get("/articles/:id", async (req, res) => {
   const article = await Article.findById(req.params.id).populate("comments.user", "username");
   res.json(article);
 });
 
-// Like an article
 // Toggle like/unlike
 app.post("/articles/:id/like", async (req, res) => {
   const { userId } = req.body;
@@ -167,15 +222,11 @@ app.post("/articles/:id/like", async (req, res) => {
 
   if (!article) return res.status(404).json({ message: "Article not found" });
 
-  const index = article.likes.findIndex(
-    (id) => id.toString() === userId
-  );
+  const index = article.likes.findIndex(id => id.toString() === userId);
 
   if (index === -1) {
-    // not liked yet → add
     article.likes.push(userId);
   } else {
-    // already liked → remove (unlike)
     article.likes.splice(index, 1);
   }
 
@@ -184,17 +235,14 @@ app.post("/articles/:id/like", async (req, res) => {
   res.json({ likes: populated.likes });
 });
 
-
-// Unlike
 app.post("/articles/:id/unlike", async (req, res) => {
   const { userId } = req.body;
   const article = await Article.findById(req.params.id);
-  article.likes = article.likes.filter((id) => id.toString() !== userId);
+  article.likes = article.likes.filter(id => id.toString() !== userId);
   await article.save();
   res.json({ likes: article.likes });
 });
 
-// Add comment
 app.post("/articles/:id/comment", async (req, res) => {
   const { userId, text } = req.body;
   const article = await Article.findById(req.params.id);
@@ -204,14 +252,12 @@ app.post("/articles/:id/comment", async (req, res) => {
   res.json(populated.comments);
 });
 
-// Search
 app.get("/articles/search/:query", async (req, res) => {
   const { query } = req.params;
   const articles = await Article.find({ title: { $regex: query, $options: "i" } }).select("title _id");
   res.json(articles);
 });
 
-// Delete article (only admin OR author)
 app.delete("/articles/:id", verifyToken, async (req, res) => {
   try {
     const article = await Article.findById(req.params.id);
